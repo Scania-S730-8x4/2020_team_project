@@ -116,7 +116,7 @@ def image_crossover_eyes(BASE_DIR, RAW_DIR, rand_uuid, process_selection, gender
     # img_noise = random_pixel_image(min_float=0.3, max_float=0.7).to(device)
 
     perceptual_net = VGG16_for_Perceptual(n_layers=[2, 4, 14, 21]).to(device)  # conv1_1,conv1_2,conv2_2,conv3_3
-    dlatent = torch.zeros((1, 18, 512), requires_grad=True, device=device)
+    dlatent = torch.zeros((1, 18, 512), requires_grad=True, device=device)  # requires_grad를 'True'로 두어 오차 역전파 과정 중 해당 Tensor에 대한 변화도를 계산하도록 한다. 
     optimizer = optim.Adam({dlatent}, lr=0.01, betas=(0.9, 0.999), eps=1e-8)
     loss_list = []
 
@@ -124,20 +124,31 @@ def image_crossover_eyes(BASE_DIR, RAW_DIR, rand_uuid, process_selection, gender
     # [img_0 : Target IMG] / [img_1 : Ingredient IMG]
     for i in range(ITERATION):
         img_noise = random_pixel_image(min_float=0.3, max_float=0.7).to(device)
-        optimizer.zero_grad()
+        
+        optimizer.zero_grad()  # 매 Iter 시마다 가중치들의 변화도가 누적되지 않도록 그 변화도를 초기화시켜 준다.
         synth_img = g_synthesis(dlatent)
         synth_img = (synth_img*0.75 + img_noise*0.25) / 2
-
+        
+        # 랜덤 노이즈인 이미지로 시작하고, 이미 특정 DATA Set으로 학습된 모델을 사용한다.
+        # 그렇기 때문에 오차 비교 부분을 없앨 경우, 내장된 가중치를 가지고 특정한 한 인물의 이미지만을 계속 만들어낸다.
+        
+        # 순전파 과정을 수행한다.
         loss_wl0 = caluclate_loss(synth_img, img_0, perceptual_net, img_p0, blur_mask_eyes, MSE_Loss, upsample2d)
+        # 'loss_wl0'은 변화해 갈 synth_imge와 img_0(Target Image)에 각각 'blur_mask_eyes'마스크를 적용한 Image들 간의 오차를 계산해 낸다.
         loss_wl1 = caluclate_loss(synth_img, img_1, perceptual_net, img_p1, blur_mask_lids, MSE_Loss, upsample2d)
+        # 'loss_wl1'은 변화해 갈 synth_imge와 img_1(Ingredient Image)에 각각 'blur_mask_lids'마스크를 적용한 Image들 간의 오차를 계산해 낸다.
         loss = loss_wl0 + loss_wl1
+        # 최종 loss는 loss_wl0, loss_wl1 두 loss 모두를 더한 값이다.
         loss.backward()
+        # 오차 역전파 과정을 진행한다.
 
         optimizer.step()
-
+        # 가중치의 변화도를 .step()함수를 호출해 갱신한다.
+        
         loss_np = loss.detach().cpu().numpy()
         loss_0 = loss_wl0.detach().cpu().numpy()
         loss_1 = loss_wl1.detach().cpu().numpy()
+        # 위 순전파 과정에서 구해진 해당 Iter의 Loss값들을 연산 기록으로부터 분리한 후 별도의 변수에 따로 저장한다.
 
         loss_list.append(loss_np)
 
@@ -145,9 +156,6 @@ def image_crossover_eyes(BASE_DIR, RAW_DIR, rand_uuid, process_selection, gender
             print("iter{}: loss --{},  loss0 --{},  loss1 --{}".format(i, loss_np, loss_0, loss_1))
         elif i == (ITERATION - 1):
             save_image(img_1*blur_mask1 + synth_img*blur_mask0_1, final_name)
-
-    # if gender == 'male':
-    #     color_histogram_matching(final_name, ingredient_name, final_name)
 
     origin_name = '{}{}_origin.png'.format(FINAL_IMAGE_DIR, str(rand_uuid))
     os.replace(ingredient_name, origin_name)
